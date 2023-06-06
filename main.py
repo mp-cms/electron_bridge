@@ -79,15 +79,14 @@ def trapezoidal_integration(integrand, grid):
     return integral
 
 
-def f_qe1_i(alm_final, alm_initial, grid, photon_m):
+def f_qe1_i(alm_final, alm_initial, grid, transition_m):
     '''
     Calculates <f|Q_E1|i>, where Q_EI = -r
     '''
-    np.sqrt(4.*np.pi/3.)
     sum_lm = complex(0., 0.)
     for (l1_q, m1_q) in tqdm(alm_initial[0].keys()):
         for (l2_q, m2_q) in alm_final[0].keys():
-            angular_part = real_gaunt(l1_q, l2_q, 1, m1_q, m2_q, photon_m,
+            angular_part = real_gaunt(l1_q, l2_q, 1, m1_q, m2_q, transition_m,
                                       prec=16)
             if angular_part < 1e-10:
                 continue
@@ -98,6 +97,26 @@ def f_qe1_i(alm_final, alm_initial, grid, photon_m):
             radial_part = trapezoidal_integration(integrand, grid)
             sum_lm += radial_part * angular_part
     return np.sqrt(4.*np.pi/3.) * sum_lm
+
+
+def f_te2_i(alm_final, alm_initial, grid, transition_m):
+    '''
+    Calculates <f|T_E2|i>, where T_E2 = -1/r³ sqrt(4π/5)Y_{2,q}
+    '''
+    sum_lm = complex(0., 0.)
+    for (l1_q, m1_q) in tqdm(alm_initial[0].keys()):
+        for (l2_q, m2_q) in alm_final[0].keys():
+            angular_part = real_gaunt(l1_q, l2_q, 2, m1_q, m2_q, transition_m,
+                                      prec=16)
+            if angular_part < 1e-10:
+                continue
+            integrand = [np.conj(alm_rf[(l2_q, m2_q)]) * alm_ri[(l1_q, m1_q)] *
+                         1./grid[grid_i]
+                         for grid_i, (alm_ri, alm_rf)
+                         in enumerate(zip(alm_initial, alm_final))]
+            radial_part = trapezoidal_integration(integrand, grid)
+            sum_lm += radial_part * angular_part
+    return np.sqrt(4.*np.pi/5.) * sum_lm
 
 
 if __name__ == "__main__":

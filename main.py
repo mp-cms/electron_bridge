@@ -51,21 +51,17 @@ def extrapolate_nucleus(alm, grid):
     Extrapolate each alm coefficient to the nucleus
     Its radius is assumed to be grid[0]
     '''
-    alm_0 = {}
-    for l_q, m_q in alm[0].keys():
-        if l_q == m_q == 0:
-            coeffs = np.array([[np.log10(grid[1]), 1], [np.log10(grid[2]), 1]])
-            ordinate = np.array([np.real(alm[0][(l_q, m_q)]),
-                                 np.real(alm[1][(l_q, m_q)])])
-            k_real, d_real = np.linalg.solve(coeffs, ordinate)
-            nucleus_real = k_real*np.log10(grid[0]) + d_real
-            ordinate = np.array([np.imag(alm[0][(l_q, m_q)]),
-                                 np.imag(alm[1][(l_q, m_q)])])
-            k_imag, d_imag = np.linalg.solve(coeffs, ordinate)
-            nucleus_imag = k_imag*np.log10(grid[0]) + d_imag
-            alm_0[l_q, m_q] = complex(nucleus_real, nucleus_imag)
-        else:
-            alm_0[l_q, m_q] = complex(0., 0.)
+    alm_0 = {(l_q, m_q): complex(0., 0.) for (l_q, m_q) in alm[0].keys()}
+    coeffs = np.array([[np.log10(grid[1]), 1], [np.log10(grid[2]), 1]])
+    ordinate = np.array([np.real(alm[0][(0, 0)]),
+                         np.real(alm[1][(0, 0)])])
+    k_real, d_real = np.linalg.solve(coeffs, ordinate)
+    nucleus_real = k_real*np.log10(grid[0]) + d_real
+    ordinate = np.array([np.imag(alm[0][(0, 0)]),
+                         np.imag(alm[1][(0, 0)])])
+    k_imag, d_imag = np.linalg.solve(coeffs, ordinate)
+    nucleus_imag = k_imag*np.log10(grid[0]) + d_imag
+    alm_0[(0, 0)] = complex(nucleus_real, nucleus_imag)
     alm.insert(0, alm_0)
     return alm
 

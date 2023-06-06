@@ -105,7 +105,7 @@ def f_qe1_i(alm_final, alm_initial, grid, photon_m):
 
 
 if __name__ == "__main__":
-    R_NUCLEUS = 5.7557e-15  # https://www-nds.iaea.org/radii/
+    R_NUCLEUS = 5.7557e-15 * 1./1e-10  # https://www-nds.iaea.org/radii/
     GRID = read_grid()
     GRID.insert(0, R_NUCLEUS)
     BAND_FINAL = 235

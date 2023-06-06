@@ -83,7 +83,7 @@ def trapezoidal_integration(integrand, grid):
     return integral
 
 
-def f_qe1_i(alm_final, alm_initial, grid, photon_q):
+def f_qe1_i(alm_final, alm_initial, grid, photon_m):
     '''
     Calculates <f|Q_E1|i>, where Q_EI = -r
     '''
@@ -91,7 +91,7 @@ def f_qe1_i(alm_final, alm_initial, grid, photon_q):
     sum_lm = complex(0., 0.)
     for (l1_q, m1_q) in tqdm(alm_initial[0].keys()):
         for (l2_q, m2_q) in alm_final[0].keys():
-            angular_part = real_gaunt(l1_q, l2_q, 1, m1_q, m2_q, photon_q,
+            angular_part = real_gaunt(l1_q, l2_q, 1, m1_q, m2_q, photon_m,
                                       prec=16)
             if angular_part < 1e-10:
                 continue

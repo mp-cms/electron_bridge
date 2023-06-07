@@ -8,21 +8,22 @@ see 10.1103/PhysRevA.103.053120
 TODO: Conceptually mixed real and complex spherical harmonics
 TODO: More k-points
 '''
+import pickle
+from multiprocessing import Pool, cpu_count
+
 import yaml
 import numpy as np
-
 from tqdm import tqdm
 # import matplotlib.pyplot as plt
-from time import time
-
+# from IPython import embed
 from sympy import KroneckerDelta
 from sympy.physics.wigner import real_gaunt
 from scipy.constants import speed_of_light as c0
 
 
-def read_grid(fname='r_grid.yaml'):
+def read_yaml(fname):
     '''
-    Read the radial grid
+    Read yaml file
     '''
     with open(fname, "r", encoding="utf-8") as stream:
         return yaml.load(stream, Loader=yaml.CSafeLoader)
@@ -43,6 +44,7 @@ def read_alm(band):
                 for _ in range(len(data))]
     for r_i, alm_data in enumerate(data):
         for key_str in alm_data.keys():
+
             l_q = int(key_str.split(',')[0][1:])
             m_q = int(key_str.split(',')[1][:-1])
             val = alm_data[key_str].replace(" ", "").replace("im", "j")
@@ -68,6 +70,18 @@ def extrapolate_nucleus(alm, grid):
     alm_0[(0, 0)] = complex(nucleus_real, nucleus_imag)
     alm.insert(0, alm_0)
     return alm
+
+
+def merge_info(info, alm):
+    '''
+    Make a dictionay of band information and expansion coefficients
+    '''
+    data = {"band": info[0],
+            "energy": info[1],
+            "occupation": info[2],
+            "localization": info[3],
+            "coefficients": alm}
+    return data
 
 
 def trapezoidal_integration(integrand, grid):
@@ -113,7 +127,7 @@ def f_qe1_i(alm_final, alm_initial, grid, transition_m):
     '''
     assert -1 <= transition_m <= 1
     sum_lm = complex(0., 0.)
-    for (li_q, mi_q) in tqdm(alm_initial[0].keys()):
+    for (li_q, mi_q) in alm_initial[0].keys():
         for (lf_q, mf_q) in alm_final[0].keys():
             angular_part = real_gaunt(li_q, lf_q, 1, mi_q, mf_q, transition_m,
                                       prec=16)
@@ -125,7 +139,7 @@ def f_qe1_i(alm_final, alm_initial, grid, transition_m):
                          in zip(grid, alm_initial, alm_final)]
             radial_part = trapezoidal_integration(integrand, grid)
             sum_lm += radial_part * angular_part
-    return np.sqrt(4.*np.pi/3.) * sum_lm
+    return complex(np.sqrt(4.*np.pi/3.) * sum_lm)
 
 
 def f_te2_i(alm_final, alm_initial, grid, transition_m):
@@ -134,7 +148,7 @@ def f_te2_i(alm_final, alm_initial, grid, transition_m):
     '''
     assert -2 <= transition_m <= 2
     sum_lm = complex(0., 0.)
-    for (li_q, mi_q) in tqdm(alm_initial[0].keys()):
+    for (li_q, mi_q) in alm_initial[0].keys():
         for (lf_q, mf_q) in alm_final[0].keys():
             angular_part = real_gaunt(li_q, lf_q, 2, mi_q, mf_q, transition_m,
                                       prec=16)
@@ -146,7 +160,7 @@ def f_te2_i(alm_final, alm_initial, grid, transition_m):
                          in zip(grid, alm_initial, alm_final)]
             radial_part = trapezoidal_integration(integrand, grid)
             sum_lm += radial_part * angular_part
-    return np.sqrt(4.*np.pi/5.) * sum_lm
+    return complex(np.sqrt(4.*np.pi/5.) * sum_lm)
 
 
 def f_tm1_i(alm_final, alm_initial, grid, transition_m):
@@ -158,7 +172,7 @@ def f_tm1_i(alm_final, alm_initial, grid, transition_m):
     factor = np.sqrt(3./(20.*np.pi))
     m_s = 1./2.
     sum_lm = complex(0., 0.)
-    for (li_q, mi_q) in tqdm(alm_initial[0].keys()):
+    for (li_q, mi_q) in alm_initial[0].keys():
         for (lf_q, mf_q) in alm_final[0].keys():
             if transition_m == 1:
                 angular_part = -1/np.sqrt(2) * l_plus(li_q, mi_q) *\
@@ -189,20 +203,128 @@ def f_tm1_i(alm_final, alm_initial, grid, transition_m):
                          in zip(grid, alm_initial, alm_final)]
             radial_part = trapezoidal_integration(integrand, grid)
             sum_lm += radial_part * angular_part
-    return 1./c0 * sum_lm
+    return complex(1./c0 * sum_lm)
+
+
+def single_tmi(final, operator, initial, grid, data):
+    '''
+    Calculate transition moment integrals <f|O|i>
+    data is modified during the run and should be a dictionary
+    '''
+    if operator == "Q_E1":
+        for t_m in range(-1, 1+1):
+            tmi = f_qe1_i(final['coefficients'], initial['coefficients'],
+                          grid, t_m)
+            data[(final['band'], operator, t_m, initial['band'])] = tmi
+    elif operator == "T_E2":
+        for t_m in range(-2, 2+1):
+            tmi = f_te2_i(final['coefficients'], initial['coefficients'],
+                          grid, t_m)
+            data[(final['band'], operator, t_m, initial['band'])] = tmi
+    elif operator == "T_M1":
+        for t_m in range(-1, 1+1):
+            tmi = f_tm1_i(final['coefficients'], initial['coefficients'],
+                          grid, t_m)
+            data[final['band']][operator][t_m][initial['band']] = tmi
+    return data
 
 
 if __name__ == "__main__":
+    print("    ELECTRON BRIDGE RATES")
+    print("    =====================")
     R_NUCLEUS = 5.7557e-15 * 1./1e-10  # https://www-nds.iaea.org/radii/
-    GRID = read_grid()
-    GRID.insert(0, R_NUCLEUS)
     BAND_FINAL = 235
     BAND_INITIAL = 236
     BAND_MIN = 236
-    BAND_MAX = 241
-    ALM_INITIAL = extrapolate_nucleus(read_alm(BAND_INITIAL), GRID)
-    ALM_FINAL = extrapolate_nucleus(read_alm(BAND_FINAL), GRID)
-    print(f_tm1_i(ALM_FINAL, ALM_INITIAL, GRID, 0))
-    assert 0
-    ALM_INTERMEDIATE = [extrapolate_nucleus(read_alm(BAND), GRID)
-                        for BAND in range(BAND_MIN, BAND_MAX+1)]
+    BAND_MAX = 240
+
+    print("::: Reading input .yaml files")
+    INFO = read_yaml("./info.yaml")
+    GRID = read_yaml("./r_grid.yaml")
+    GRID.insert(0, R_NUCLEUS)
+    INITIAL = merge_info(INFO[BAND_INITIAL-1],
+                         extrapolate_nucleus(read_alm(BAND_INITIAL), GRID))
+    FINAL = merge_info(INFO[BAND_FINAL-1],
+                       extrapolate_nucleus(read_alm(BAND_FINAL), GRID))
+    INTERMEDIATES = [merge_info(INFO[BAND-1],
+                                extrapolate_nucleus(read_alm(BAND), GRID))
+                     # if BAND != BAND_INITIAL] ?
+                     for BAND in range(BAND_MIN, BAND_MAX+1)]
+    INTERMEDIATES.append(FINAL)
+
+    TMIS_ALL = {}
+    print("::: Calculating Q_E1 Integrals")
+    with Pool(cpu_count()) as p:
+        print("=>  <f|Q_E1|u>")
+        for T_M in range(-1, 1+1):
+            print(f"q = {T_M}")
+            ITERATOR = ((FINAL['coefficients'], INT['coefficients'],
+                         GRID, T_M)
+                        for INT in INTERMEDIATES)
+            TMIS = p.starmap(f_qe1_i,
+                             tqdm(ITERATOR, total=len(INTERMEDIATES)))
+            for INT, TMI in zip(INTERMEDIATES, TMIS):
+                TMIS_ALL[(FINAL["band"], "Q_E1", T_M, INT["band"])] = TMI
+        print(":: <u|Q_E1|f>")
+        for T_M in range(-1, 1+1):
+            print(f"q = {T_M}")
+            ITERATOR = ((INT['coefficients'], INITIAL['coefficients'],
+                         GRID, T_M)
+                        for INT in INTERMEDIATES)
+            TMIS = p.starmap(f_qe1_i,
+                             tqdm(ITERATOR, total=len(INTERMEDIATES)))
+            for INT, TMI in zip(INTERMEDIATES, TMIS):
+                TMIS_ALL[(INT["band"], "Q_E1", T_M, INITIAL["band"])] = TMI
+    print("=>  Saving to TMIs.pckl")
+    with open('TMIs.pckl', 'wb') as handle:
+        pickle.dump(TMIS_ALL, handle, protocol=-1)
+    print("::: Calculating T_E2 Integrals")
+    with Pool(cpu_count()) as p:
+        print("=>  <f|Q_E2|u>")
+        for T_M in range(-2, 2+1):
+            print(f"q = {T_M}")
+            ITERATOR = ((FINAL['coefficients'], INT['coefficients'],
+                         GRID, T_M)
+                        for INT in INTERMEDIATES)
+            TMIS = p.starmap(f_te2_i,
+                             tqdm(ITERATOR, total=len(INTERMEDIATES)))
+            for INT, TMI in zip(INTERMEDIATES, TMIS):
+                TMIS_ALL[(FINAL["band"], "T_E2", T_M, INT["band"])] = TMI
+        print(":: <u|Q_E1|f>")
+        for T_M in range(-1, 1+1):
+            print(f"q = {T_M}")
+            ITERATOR = ((INT['coefficients'], INITIAL['coefficients'],
+                         GRID, T_M)
+                        for INT in INTERMEDIATES)
+            TMIS = p.starmap(f_te2_i,
+                             tqdm(ITERATOR, total=len(INTERMEDIATES)))
+            for INT, TMI in zip(INTERMEDIATES, TMIS):
+                TMIS_ALL[(INT["band"], "T_E2", T_M, INITIAL["band"])] = TMI
+    print("=>  Saving to TMIs.pckl")
+    with open('TMIs.pckl', 'wb') as handle:
+        pickle.dump(TMIS_ALL, handle, protocol=-1)
+    with Pool(cpu_count()) as p:
+        print("=>  <f|T_M1|u>")
+        for T_M in range(-1, 1+1):
+            print(f"q = {T_M}")
+            ITERATOR = ((FINAL['coefficients'], INT['coefficients'],
+                         GRID, T_M)
+                        for INT in INTERMEDIATES)
+            TMIS = p.starmap(f_tm1_i,
+                             tqdm(ITERATOR, total=len(INTERMEDIATES)))
+            for INT, TMI in zip(INTERMEDIATES, TMIS):
+                TMIS_ALL[(FINAL["band"], "Q_M1", T_M, INT["band"])] = TMI
+        print(":: <u|T_M1|f>")
+        for T_M in range(-1, 1+1):
+            print(f"q = {T_M}")
+            ITERATOR = ((INT['coefficients'], INITIAL['coefficients'],
+                         GRID, T_M)
+                        for INT in INTERMEDIATES)
+            TMIS = p.starmap(f_tm1_i,
+                             tqdm(ITERATOR, total=len(INTERMEDIATES)))
+            for INT, TMI in zip(INTERMEDIATES, TMIS):
+                TMIS_ALL[(INT["band"], "T_M1", T_M, INITIAL["band"])] = TMI
+    print("::: Saving to TMIs.pckl")
+    with open('TMIs.pckl', 'wb') as handle:
+        pickle.dump(TMIS_ALL, handle, protocol=-1)
+    # single_tmi(FINAL, "Q_E1", INITIAL, GRID, TMIS)

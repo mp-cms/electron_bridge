@@ -10,12 +10,14 @@ TODO: More k-points
 '''
 import pickle
 from multiprocessing import Pool, cpu_count
+from os.path import exists
 
 import yaml
 import numpy as np
 from tqdm import tqdm
 # import matplotlib.pyplot as plt
 # from IPython import embed
+from time import time
 from sympy import KroneckerDelta
 from sympy.physics.wigner import real_gaunt
 from scipy.constants import speed_of_light as c0
@@ -121,16 +123,17 @@ def l_0(m_q):
     return m_q
 
 
-def f_qe1_i(alm_final, alm_initial, grid, transition_m):
+def f_qe1_i(alm_final, alm_initial, grid, t_m, gaunt_coefficients):
     '''
     Calculates <f|Q_E1|i>, where Q_EI = -r
     '''
-    assert -1 <= transition_m <= 1
+    assert -1 <= t_m <= 1
     sum_lm = complex(0., 0.)
     for (li_q, mi_q) in alm_initial[0].keys():
         for (lf_q, mf_q) in alm_final[0].keys():
-            angular_part = real_gaunt(li_q, lf_q, 1, mi_q, mf_q, transition_m,
-                                      prec=16)
+            # angular_part = real_gaunt(li_q, 1, lf_q, mi_q, t_m, mf_q,
+            #                           prec=16)
+            angular_part = gaunt_coefficients[(li_q, 1, lf_q, mi_q, t_m, mf_q)]
             if angular_part < 1e-10:
                 continue
             integrand = [np.conj(alm_rf[(lf_q, mf_q)]) * alm_ri[(li_q, mi_q)] *
@@ -142,16 +145,17 @@ def f_qe1_i(alm_final, alm_initial, grid, transition_m):
     return complex(np.sqrt(4.*np.pi/3.) * sum_lm)
 
 
-def f_te2_i(alm_final, alm_initial, grid, transition_m):
+def f_te2_i(alm_final, alm_initial, grid, t_m, gaunt_coefficients):
     '''
     Calculates <f|T_E2|i>, where T_E2 = -1/r³ sqrt(4π/5)Y_{2,q}
     '''
-    assert -2 <= transition_m <= 2
+    assert -2 <= t_m <= 2
     sum_lm = complex(0., 0.)
     for (li_q, mi_q) in alm_initial[0].keys():
         for (lf_q, mf_q) in alm_final[0].keys():
-            angular_part = real_gaunt(li_q, lf_q, 2, mi_q, mf_q, transition_m,
-                                      prec=16)
+            # angular_part = real_gaunt(li_q, 2, lf_q, mi_q, t_m, mf_q,
+            #                           prec=16)
+            angular_part = gaunt_coefficients[(li_q, 2, lf_q, mi_q, t_m, mf_q)]
             if angular_part < 1e-10:
                 continue
             integrand = [np.conj(alm_rf[(lf_q, mf_q)]) * alm_ri[(li_q, mi_q)] *
@@ -163,37 +167,37 @@ def f_te2_i(alm_final, alm_initial, grid, transition_m):
     return complex(np.sqrt(4.*np.pi/5.) * sum_lm)
 
 
-def f_tm1_i(alm_final, alm_initial, grid, transition_m):
+def f_tm1_i(alm_final, alm_initial, grid, t_m, gaunt_coefficients):
     '''
     Calculates <f|T_M1|i>,
     where T_M1 = 1/c[l/r³ - σ/(2r³) + 3r(r·σ)/2r⁵ + 4πσδ(r)/3]
     '''
-    assert -1 <= transition_m <= 1
+    assert -1 <= t_m <= 1
     factor = np.sqrt(3./(20.*np.pi))
     m_s = 1./2.
     sum_lm = complex(0., 0.)
     for (li_q, mi_q) in alm_initial[0].keys():
         for (lf_q, mf_q) in alm_final[0].keys():
-            if transition_m == 1:
+            if t_m == 1:
                 angular_part = -1/np.sqrt(2) * l_plus(li_q, mi_q) *\
                                KroneckerDelta(lf_q, li_q) *\
                                KroneckerDelta(mf_q, mi_q+1) +\
-                               real_gaunt(lf_q, 2, li_q, mf_q, 1, mi_q,
-                                          prec=16) *\
+                               gaunt_coefficients[(lf_q, 2, li_q,
+                                                   mf_q, 1, mi_q)] *\
                                4*np.pi*factor*m_s
-            elif transition_m == -1:
+            elif t_m == -1:
                 angular_part = -1/np.sqrt(2) * l_minus(li_q, mi_q) *\
                                KroneckerDelta(lf_q, li_q) *\
                                KroneckerDelta(mf_q, mi_q-1) +\
-                               real_gaunt(lf_q, 2, li_q, mf_q, -1, mi_q,
-                                          prec=16) *\
+                               gaunt_coefficients[(lf_q, 2, li_q,
+                                                   mf_q, -1, mi_q)] *\
                                4*np.pi*factor*m_s
-            elif transition_m == 0:
+            elif t_m == 0:
                 angular_part = (1./(4.*np.pi) * l_0(mi_q)) *\
                                KroneckerDelta(lf_q, li_q) *\
                                KroneckerDelta(mf_q, mi_q) +\
-                               real_gaunt(lf_q, 2, li_q, mf_q, 0, mi_q,
-                                          prec=16) *\
+                               gaunt_coefficients[(lf_q, 2, li_q,
+                                                   mf_q, 0, mi_q)] *\
                                4*np.pi*factor*m_s/np.sqrt(5.*np.pi)
             if angular_part < 1e-10:
                 continue
@@ -206,7 +210,7 @@ def f_tm1_i(alm_final, alm_initial, grid, transition_m):
     return complex(1./c0 * sum_lm)
 
 
-def single_tmi(final, operator, initial, grid, data):
+def single_tmi(final, operator, initial, grid, data, gaunt_coefficients):
     '''
     Calculate transition moment integrals <f|O|i>
     data is modified during the run and should be a dictionary
@@ -214,7 +218,7 @@ def single_tmi(final, operator, initial, grid, data):
     if operator == "Q_E1":
         for t_m in range(-1, 1+1):
             tmi = f_qe1_i(final['coefficients'], initial['coefficients'],
-                          grid, t_m)
+                          grid, t_m, gaunt_coefficients)
             data[(final['band'], operator, t_m, initial['band'])] = tmi
     elif operator == "T_E2":
         for t_m in range(-2, 2+1):
@@ -225,8 +229,22 @@ def single_tmi(final, operator, initial, grid, data):
         for t_m in range(-1, 1+1):
             tmi = f_tm1_i(final['coefficients'], initial['coefficients'],
                           grid, t_m)
-            data[final['band']][operator][t_m][initial['band']] = tmi
+            data[(final['band'], operator, t_m, initial['band'])] = tmi
     return data
+
+
+def calculate_gaunt(lmax):
+    '''
+    Calculate all necessary Gaunt coefficients
+    '''
+    return {(l1_q, t_l, l2_q, m1_q, t_m, m2_q):
+            real_gaunt(l1_q, t_l, l2_q, m1_q, t_m, m2_q, prec=16)
+            for l1_q in range(0, lmax+1)
+            for t_l in range(1, 2+1)
+            for l2_q in range(0, lmax+1)
+            for m1_q in range(-l1_q, l1_q+1)
+            for t_m in range(-t_l, t_l+1)
+            for m2_q in range(-l2_q, l2_q+1)}
 
 
 if __name__ == "__main__":
@@ -238,6 +256,16 @@ if __name__ == "__main__":
     BAND_MIN = 236
     BAND_MAX = 240
 
+    if exists("gaunt.pckl"):
+        print("::: Loading Gaunt coefficients")
+        with open("gaunt.pckl", "rb") as handle:
+            GAUNT_COEFFICIENTS = pickle.load(handle)
+    else:
+        print("::: Calculating Gaunt coefficients")
+        GAUNT_COEFFICIENTS = calculate_gaunt(12)
+        print("Saving to gaunt.pckl")
+        with open("gaunt.pckl", "wb") as handle:
+            pickle.dump(GAUNT_COEFFICIENTS, handle, protocol=-1)
     print("::: Reading input .yaml files")
     INFO = read_yaml("./info.yaml")
     GRID = read_yaml("./r_grid.yaml")
@@ -252,6 +280,7 @@ if __name__ == "__main__":
                      for BAND in range(BAND_MIN, BAND_MAX+1)]
     INTERMEDIATES.append(FINAL)
 
+    # single_tmi(FINAL, "Q_E1", INITIAL, GRID, TMIS_ALL, GAUNT_COEFFICIENTS))
     TMIS_ALL = {}
     print("::: Calculating Q_E1 Integrals")
     with Pool(cpu_count()) as p:
@@ -259,7 +288,7 @@ if __name__ == "__main__":
         for T_M in range(-1, 1+1):
             print(f"q = {T_M}")
             ITERATOR = ((FINAL['coefficients'], INT['coefficients'],
-                         GRID, T_M)
+                         GRID, T_M, GAUNT_COEFFICIENTS)
                         for INT in INTERMEDIATES)
             TMIS = p.starmap(f_qe1_i,
                              tqdm(ITERATOR, total=len(INTERMEDIATES)))
@@ -269,7 +298,7 @@ if __name__ == "__main__":
         for T_M in range(-1, 1+1):
             print(f"q = {T_M}")
             ITERATOR = ((INT['coefficients'], INITIAL['coefficients'],
-                         GRID, T_M)
+                         GRID, T_M, GAUNT_COEFFICIENTS)
                         for INT in INTERMEDIATES)
             TMIS = p.starmap(f_qe1_i,
                              tqdm(ITERATOR, total=len(INTERMEDIATES)))
@@ -284,7 +313,7 @@ if __name__ == "__main__":
         for T_M in range(-2, 2+1):
             print(f"q = {T_M}")
             ITERATOR = ((FINAL['coefficients'], INT['coefficients'],
-                         GRID, T_M)
+                         GRID, T_M, GAUNT_COEFFICIENTS)
                         for INT in INTERMEDIATES)
             TMIS = p.starmap(f_te2_i,
                              tqdm(ITERATOR, total=len(INTERMEDIATES)))
@@ -294,7 +323,7 @@ if __name__ == "__main__":
         for T_M in range(-1, 1+1):
             print(f"q = {T_M}")
             ITERATOR = ((INT['coefficients'], INITIAL['coefficients'],
-                         GRID, T_M)
+                         GRID, T_M, GAUNT_COEFFICIENTS)
                         for INT in INTERMEDIATES)
             TMIS = p.starmap(f_te2_i,
                              tqdm(ITERATOR, total=len(INTERMEDIATES)))
@@ -308,7 +337,7 @@ if __name__ == "__main__":
         for T_M in range(-1, 1+1):
             print(f"q = {T_M}")
             ITERATOR = ((FINAL['coefficients'], INT['coefficients'],
-                         GRID, T_M)
+                         GRID, T_M, GAUNT_COEFFICIENTS)
                         for INT in INTERMEDIATES)
             TMIS = p.starmap(f_tm1_i,
                              tqdm(ITERATOR, total=len(INTERMEDIATES)))
@@ -318,7 +347,7 @@ if __name__ == "__main__":
         for T_M in range(-1, 1+1):
             print(f"q = {T_M}")
             ITERATOR = ((INT['coefficients'], INITIAL['coefficients'],
-                         GRID, T_M)
+                         GRID, T_M, GAUNT_COEFFICIENTS)
                         for INT in INTERMEDIATES)
             TMIS = p.starmap(f_tm1_i,
                              tqdm(ITERATOR, total=len(INTERMEDIATES)))
@@ -327,4 +356,3 @@ if __name__ == "__main__":
     print("::: Saving to TMIs.pckl")
     with open('TMIs.pckl', 'wb') as handle:
         pickle.dump(TMIS_ALL, handle, protocol=-1)
-    # single_tmi(FINAL, "Q_E1", INITIAL, GRID, TMIS)

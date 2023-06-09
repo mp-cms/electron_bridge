@@ -11,16 +11,17 @@ TODO: More k-points
 import pickle
 from multiprocessing import Pool, cpu_count
 from os.path import exists
+# from time import time
 
 import yaml
 import numpy as np
 from tqdm import tqdm
 # import matplotlib.pyplot as plt
 # from IPython import embed
-from time import time
 from sympy import KroneckerDelta
 from sympy.physics.wigner import real_gaunt
 from scipy.constants import speed_of_light as c0
+from scipy.constants import physical_constants
 
 
 def read_yaml(fname):
@@ -31,12 +32,12 @@ def read_yaml(fname):
         return yaml.load(stream, Loader=yaml.CSafeLoader)
 
 
-def read_alm(band):
+def read_alm(band, lmax):
     '''
     Reads a yaml file containing expansion coefficients
     at each point in the radial grid
     '''
-    lmax = 12
+    a_0 = physical_constants['Bohr radius'][0] * 1e10
     fname = f"{band}_{lmax}.yaml"
     with open(fname, "r", encoding="utf-8") as stream:
         data = yaml.load(stream, Loader=yaml.CSafeLoader)
@@ -50,7 +51,7 @@ def read_alm(band):
             l_q = int(key_str.split(',')[0][1:])
             m_q = int(key_str.split(',')[1][:-1])
             val = alm_data[key_str].replace(" ", "").replace("im", "j")
-            alm_band[r_i][(l_q, m_q)] = complex(val)
+            alm_band[r_i][(l_q, m_q)] = complex(val) * a_0**1.5
     return alm_band
 
 
@@ -210,11 +211,12 @@ def f_tm1_i(alm_final, alm_initial, grid, t_m, gaunt_coefficients):
     return complex(1./c0 * sum_lm)
 
 
-def single_tmi(final, operator, initial, grid, data, gaunt_coefficients):
+def single_tmi(final, operator, initial, grid, gaunt_coefficients):
     '''
     Calculate transition moment integrals <f|O|i>
     data is modified during the run and should be a dictionary
     '''
+    data = {}
     if operator == "Q_E1":
         for t_m in range(-1, 1+1):
             tmi = f_qe1_i(final['coefficients'], initial['coefficients'],
@@ -223,12 +225,12 @@ def single_tmi(final, operator, initial, grid, data, gaunt_coefficients):
     elif operator == "T_E2":
         for t_m in range(-2, 2+1):
             tmi = f_te2_i(final['coefficients'], initial['coefficients'],
-                          grid, t_m)
+                          grid, t_m, gaunt_coefficients)
             data[(final['band'], operator, t_m, initial['band'])] = tmi
     elif operator == "T_M1":
         for t_m in range(-1, 1+1):
             tmi = f_tm1_i(final['coefficients'], initial['coefficients'],
-                          grid, t_m)
+                          grid, t_m, gaunt_coefficients)
             data[(final['band'], operator, t_m, initial['band'])] = tmi
     return data
 
@@ -248,6 +250,7 @@ def calculate_gaunt(lmax):
 
 
 if __name__ == "__main__":
+    A_0 = physical_constants['Bohr radius'][0] * 1e10
     print("    ELECTRON BRIDGE RATES")
     print("    =====================")
     R_NUCLEUS = 5.7557e-15 * 1./1e-10  # https://www-nds.iaea.org/radii/
@@ -255,32 +258,37 @@ if __name__ == "__main__":
     BAND_INITIAL = 236
     BAND_MIN = 236
     BAND_MAX = 240
+    LMAX = 12
 
-    if exists("gaunt.pckl"):
+    if exists(f"gaunt_{LMAX}.pckl"):
         print("::: Loading Gaunt coefficients")
-        with open("gaunt.pckl", "rb") as handle:
+        with open(f"gaunt_{LMAX}.pckl", "rb") as handle:
             GAUNT_COEFFICIENTS = pickle.load(handle)
     else:
         print("::: Calculating Gaunt coefficients")
         GAUNT_COEFFICIENTS = calculate_gaunt(12)
-        print("Saving to gaunt.pckl")
-        with open("gaunt.pckl", "wb") as handle:
+        print(f"Saving to gaunt_{LMAX}.pckl")
+        with open(f"gaunt_{LMAX}.pckl", "wb") as handle:
             pickle.dump(GAUNT_COEFFICIENTS, handle, protocol=-1)
     print("::: Reading input .yaml files")
     INFO = read_yaml("./info.yaml")
     GRID = read_yaml("./r_grid.yaml")
     GRID.insert(0, R_NUCLEUS)
+    GRID = [R_VAL / A_0 for R_VAL in GRID]
     INITIAL = merge_info(INFO[BAND_INITIAL-1],
-                         extrapolate_nucleus(read_alm(BAND_INITIAL), GRID))
+                         extrapolate_nucleus(read_alm(BAND_INITIAL, LMAX),
+                                             GRID))
     FINAL = merge_info(INFO[BAND_FINAL-1],
-                       extrapolate_nucleus(read_alm(BAND_FINAL), GRID))
+                       extrapolate_nucleus(read_alm(BAND_FINAL, LMAX),
+                                           GRID))
     INTERMEDIATES = [merge_info(INFO[BAND-1],
-                                extrapolate_nucleus(read_alm(BAND), GRID))
+                                extrapolate_nucleus(read_alm(BAND, LMAX),
+                                                    GRID))
                      # if BAND != BAND_INITIAL] ?
                      for BAND in range(BAND_MIN, BAND_MAX+1)]
     INTERMEDIATES.append(FINAL)
 
-    # single_tmi(FINAL, "Q_E1", INITIAL, GRID, TMIS_ALL, GAUNT_COEFFICIENTS))
+    # single_tmi(FINAL, "Q_E1", INITIAL, GRID, GAUNT_COEFFICIENTS))
     TMIS_ALL = {}
     print("::: Calculating Q_E1 Integrals")
     with Pool(cpu_count()) as p:

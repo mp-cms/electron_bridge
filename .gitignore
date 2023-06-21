@@ -1,2 +1,7 @@
 *.yaml
 *.pckl
+__pycache__
+.mypy*
+.ruff*
+doc
+graveyard.py
